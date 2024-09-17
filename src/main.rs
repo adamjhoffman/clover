@@ -39,9 +39,22 @@ impl<'a> ClassOverview<'a> {
     }
     fn push_class(&mut self, class_name: &'a str) {
         self.class_names.push(class_name);
-        for classes in &mut self.overview {
-            classes.push(Self::generate_empty_class(&self.task_names.len()))
+        for weeks in &mut self.overview {
+            weeks.push(Self::generate_empty_class(&self.task_names.len()))
         }
+    }
+    fn pop_class(&mut self, class_name: &'a str) -> Result<(), String> {
+        if let Some(index) = self.class_names.iter().position(|c| *c == class_name) {
+            for weeks in &mut self.overview {
+                weeks.remove(index);
+            }
+            self.class_names.remove(index);
+            return Ok(());
+        }
+        Err(format!(
+            r#"Failed to find class "{class_name}" in classes. Current classes include {:?}"#,
+            self.class_names
+        ))
     }
     fn push_task(&mut self, task_name: &'a str) {
         self.task_names.push(task_name);
@@ -50,6 +63,21 @@ impl<'a> ClassOverview<'a> {
                 tasks.push(false);
             }
         }
+    }
+    fn pop_task(&mut self, task_name: &'a str) -> Result<(), String> {
+        if let Some(index) = self.task_names.iter().position(|c| *c == task_name) {
+            for weeks in &mut self.overview {
+                for classes in weeks {
+                    classes.remove(index);
+                }
+            }
+            self.task_names.remove(index);
+            return Ok(());
+        }
+        Err(format!(
+            r#"Failed to find task "{task_name}" in tasks. Current tasks include {:?}"#,
+            self.task_names
+        ))
     }
     fn set_time_frame(&mut self, week_count: &usize) {
         if self.overview.len() > *week_count {
@@ -68,7 +96,7 @@ impl<'a> ClassOverview<'a> {
         week: &usize,
         class_name: &str,
         task_name: &'a str,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), String> {
         if *week < self.overview.len() {
             if let Some(class_name_index) = self.class_names.iter().position(|&c| c == class_name) {
                 if let Some(task_name_index) = self.task_names.iter().position(|&t| t == task_name)
@@ -76,11 +104,48 @@ impl<'a> ClassOverview<'a> {
                     self.overview[*week][class_name_index][task_name_index] = true;
                     return Ok(());
                 }
-                return Err("Invalid task supplied!");
+                return Err(format!(
+                    "Invalid task supplied! Current tasks include: {:?}",
+                    self.task_names
+                ));
             }
-            return Err("Invalid class supplied!");
+            return Err(format!(
+                "Invalid class supplied! Current classes include: {:?}",
+                self.class_names
+            ));
         }
-        return Err("Invalid week supplied!");
+        return Err(format!(
+            "Invalid week supplied! Current weeks include: 0-{}",
+            self.overview.len()
+        ));
+    }
+    fn revert_task_for_class(
+        &mut self,
+        week: &usize,
+        class_name: &str,
+        task_name: &'a str,
+    ) -> Result<(), String> {
+        if *week < self.overview.len() {
+            if let Some(class_name_index) = self.class_names.iter().position(|&c| c == class_name) {
+                if let Some(task_name_index) = self.task_names.iter().position(|&t| t == task_name)
+                {
+                    self.overview[*week][class_name_index][task_name_index] = false;
+                    return Ok(());
+                }
+                return Err(format!(
+                    "Invalid task supplied! Current tasks include: {:?}",
+                    self.task_names
+                ));
+            }
+            return Err(format!(
+                "Invalid class supplied! Current classes include: {:?}",
+                self.class_names
+            ));
+        }
+        return Err(format!(
+            "Invalid week supplied! Current weeks include: 0-{}",
+            self.overview.len()
+        ));
     }
     fn save_configuration(&self, configuration_file_path: &Path) {
         if let Ok(mut configuration_file) = OpenOptions::new()
@@ -111,7 +176,11 @@ impl<'a> std::fmt::Display for ClassOverview<'a> {
             .iter()
             .map(|c| " ".len() + c.len() + " ".len())
             .sum::<usize>()
-            + max(self.task_names.len() - 1, 0) * "|".len();
+            + if self.task_names.is_empty() {
+                0
+            } else {
+                self.task_names.len() - 1 * "|".len()
+            };
         let column_widths = self
             .class_names
             .iter()
@@ -153,7 +222,7 @@ impl<'a> std::fmt::Display for ClassOverview<'a> {
                     " ".repeat(if index < (self.task_names.len() - 1) {
                         1
                     } else {
-                        (column_widths[column_index] - current_width) - 1
+                        (column_widths[column_index] - current_width) + 2 - self.task_names.len()
                     })
                 )?;
             }
@@ -173,7 +242,7 @@ impl<'a> std::fmt::Display for ClassOverview<'a> {
                     current_width += format!(" {task_name} ").len();
                     write!(
                         f,
-                        " {}{}|",
+                        " {} |",
                         {
                             if states[index] {
                                 "█"
@@ -181,12 +250,16 @@ impl<'a> std::fmt::Display for ClassOverview<'a> {
                                 " "
                             }
                         }
-                        .repeat(task_name.len()),
-                        " ".repeat(if index < (self.task_names.len() - 1) {
-                            1
-                        } else {
-                            (column_widths[column_index] - current_width) - 1
-                        })
+                        .repeat(
+                            task_name.len()
+                                + if index < (self.task_names.len() - 1) {
+                                    0
+                                } else {
+                                    (column_widths[column_index] - current_width) + 2
+                                        - self.task_names.len()
+                                        - 1
+                                }
+                        ),
                     )?;
                 }
             }
@@ -217,8 +290,18 @@ fn main() {
                 .arg(arg!([class_name] "The class name").value_parser(value_parser!(String))),
         )
         .subcommand(
+            Command::new("removeclass")
+                .about("Removes a class from the overview")
+                .arg(arg!([class_name] "The class name").value_parser(value_parser!(String))),
+        )
+        .subcommand(
             Command::new("addtask")
                 .about("Adds a new task to the overview")
+                .arg(arg!([task_name] "The task name").value_parser(value_parser!(String))),
+        )
+        .subcommand(
+            Command::new("removetask")
+                .about("Removes a task to the overview")
                 .arg(arg!([task_name] "The task name").value_parser(value_parser!(String))),
         )
         .subcommand(
@@ -226,10 +309,9 @@ fn main() {
                 .about("Sets the amount of weeks the overview is supposed to track")
                 .arg(arg!([week_count] "The week count").value_parser(value_parser!(usize))),
         )
-        .subcommand(Command::new("show").about("Shows the class overview"))
         .subcommand(
             Command::new("complete")
-                .about("Completes the task for the given class")
+                .about("Completes the task for the given class in the given week")
                 .arg(
                     arg!(
                         -c --class <CLASS> "The class to complete the task in"
@@ -252,6 +334,33 @@ fn main() {
                     .value_parser(value_parser!(usize)),
                 ),
         )
+        .subcommand(
+            Command::new("revert")
+                .about("Reverts the completion of the task for the given class in the given week")
+                .arg(
+                    arg!(
+                        -c --class <CLASS> "The class to revert the task in"
+                    )
+                    .required(true)
+                    .value_parser(value_parser!(String)),
+                )
+                .arg(
+                    arg!(
+                        -t --task <TASK> "The task to revert"
+                    )
+                    .required(true)
+                    .value_parser(value_parser!(String)),
+                )
+                .arg(
+                    arg!(
+                        -w --week <WEEK> "The week to revert the task for"
+                    )
+                    .required(true)
+                    .value_parser(value_parser!(usize)),
+                ),
+        )
+        .subcommand(Command::new("show").about("Shows the class overview"))
+        .subcommand(Command::new("clear").about("Clears the entire overview"))
         .get_matches();
 
     let config = if let Some(config_file_path) = matches.get_one::<PathBuf>("config") {
@@ -274,22 +383,40 @@ fn main() {
 
     if let Some(matches) = matches.subcommand_matches("addclass") {
         if let Some(class_name) = matches.get_one::<String>("class_name") {
-            println!("Added class {class_name}");
             class_overview.push_class(class_name);
+            println!("Added class {class_name}");
+        }
+    }
+
+    if let Some(matches) = matches.subcommand_matches("removeclass") {
+        if let Some(class_name) = matches.get_one::<String>("class_name") {
+            class_overview
+                .pop_class(class_name)
+                .expect("Failed to remove class");
+            println!("Removed class {class_name}");
         }
     }
 
     if let Some(matches) = matches.subcommand_matches("addtask") {
         if let Some(task_name) = matches.get_one::<String>("task_name") {
-            println!("Added task {task_name}");
             class_overview.push_task(task_name);
+            println!("Added task {task_name}");
+        }
+    }
+
+    if let Some(matches) = matches.subcommand_matches("removetask") {
+        if let Some(task_name) = matches.get_one::<String>("task_name") {
+            class_overview
+                .pop_task(task_name)
+                .expect("Failed to remove task");
+            println!("Added task {task_name}");
         }
     }
 
     if let Some(matches) = matches.subcommand_matches("settime") {
         if let Some(week_count) = matches.get_one::<usize>("week_count") {
-            println!("Set week count to {week_count}");
             class_overview.set_time_frame(week_count);
+            println!("Set week count to {week_count}");
         }
     }
 
@@ -317,9 +444,38 @@ fn main() {
         }
     }
 
+    if let Some(matches) = matches.subcommand_matches("revert") {
+        if let Some(week) = matches.get_one::<usize>("week") {
+            if let Some(class_name) = matches.get_one::<String>("class") {
+                if let Some(task_name) = matches.get_one::<String>("task") {
+                    if let Err(error) =
+                        class_overview.revert_task_for_class(week, class_name, task_name)
+                    {
+                        println!(
+                            "Failed to revert {task_name} for {class_name} in week {week}: {error}"
+                        );
+                    } else {
+                        println!("Reverted {task_name} for {class_name} in week {week}");
+                    }
+                } else {
+                    println!("No task supplied, the task is necessary for its revertion!");
+                }
+            } else {
+                println!("No class supplied, the class is necessary to flag the task's revertion!");
+            }
+        } else {
+            println!("No week supplied, the week is necessary to flag the task's revertion!");
+        }
+    }
+
     if let Some(_) = matches.subcommand_matches("show") {
         println!("{class_overview}");
-        return;
+    }
+
+    if let Some(_) = matches.subcommand_matches("clear") {
+        class_overview.overview.clear();
+        class_overview.class_names.clear();
+        class_overview.task_names.clear();
     }
 
     class_overview.save_configuration(&configuration_file_path);
