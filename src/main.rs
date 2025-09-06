@@ -17,7 +17,7 @@ struct ClassOverview<'a> {
 }
 
 impl<'a> ClassOverview<'a> {
-    fn new(configuration: &'a str) -> ClassOverview {
+    fn new(configuration: &'a str) -> ClassOverview<'a> {
         if !configuration.is_empty() {
             if let Ok(overview) = serde_json::from_str::<ClassOverview>(&configuration) {
                 return overview;
